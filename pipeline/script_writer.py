@@ -9,21 +9,30 @@ work for ANY topic: the model does the work of translating narration into
 a concrete, filmable scene description, per beat, instead of one vague
 prompt for the whole video.
 
-Uses Google's Gemini API. Model pinned to gemini-3.6-flash (current stable
-GA Flash model as of this writing) — Google retires Gemini model IDs on a
-rolling schedule (they did exactly that to gemini-2.5-flash), so if this
-starts 404ing again, check https://ai.google.dev/gemini-api/docs/models
-for the current recommended Flash model and update MODEL below.
+Calls the Gemini API directly over REST with `requests` — no google-genai
+or google-generativeai SDK. Both of those packages install under the
+shared `google` namespace, which repeatedly conflicted with
+google-api-python-client/google-auth-oauthlib (needed for the optional
+YouTube uploader) and threw "ImportError: cannot import name 'genai' from
+'google'". A plain HTTP POST has no such dependency and can't have that
+conflict.
+
+Model pinned to gemini-3.6-flash — the current stable GA Flash model as of
+this writing (the earlier gemini-2.5-flash pin broke because Google closed
+that model off to new API keys). Google retires/restricts Gemini model IDs
+on a rolling schedule, so if this starts erroring again, check
+https://ai.google.dev/gemini-api/docs/models for the current recommended
+Flash model and update MODEL below.
 """
 import json
 import os
 import re
 from dataclasses import dataclass
 
-from google import genai
-from google.genai import types
+import requests
 
 MODEL = "gemini-3.6-flash"
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
 
 SYSTEM_PROMPT = """You write scripts for short-form documentary-style videos \
 (YouTube Shorts / TikTok, ~35-50 seconds spoken). Style: punchy, factual, \
@@ -84,16 +93,22 @@ def write_script(topic: str) -> Script:
             "Get a free key at https://aistudio.google.com/apikey"
         )
 
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=f"Topic: {topic}",
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            response_mime_type="application/json",
-        ),
+    payload = {
+        "contents": [{"parts": [{"text": f"Topic: {topic}"}]}],
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "generationConfig": {"responseMimeType": "application/json"},
+    }
+    resp = requests.post(
+        API_URL,
+        params={"key": api_key},
+        json=payload,
+        timeout=60,
     )
-    data = _extract_json(response.text)
+    resp.raise_for_status()
+    result = resp.json()
+
+    raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
+    data = _extract_json(raw_text)
 
     beats = [
         Beat(narration=b["narration"], visual_keyword=b["visual_keyword"])
