@@ -1,45 +1,49 @@
-# Runs the video pipeline daily or on demand using Google Gemini
-# for script generation and Kling AI (via FAL) for video generation.
+# Free daily runner — no server needed. GitHub gives every account free
+# scheduled-runner minutes; this workflow runs the pipeline once a day and
+# uploads the finished video as a downloadable build artifact.
+#
+# Setup:
+# 1. Push this repo to GitHub.
+# 2. In repo Settings -> Secrets and variables -> Actions, add:
+#      GEMINI_API_KEY
+#      FAL_KEY
+#    Note: FAL_KEY draws down a one-time trial credit (~$10), not a free-
+#    forever tier — daily scheduled runs WILL exhaust it eventually.
+# 3. That's it — it'll run daily at 09:00 UTC. You can also trigger it
+#    manually from the Actions tab ("Run workflow").
+# 4. Optional: uncomment the upload step and add YouTube OAuth secrets if
+#    you want it to also auto-publish, not just build the file.
 
 name: Daily video
 
 on:
   schedule:
     - cron: "0 9 * * *"
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FAL_KEY: ${{ secrets.FAL_KEY }}
-        run: |
-          python main.py
+        run: python main.py
 
-      - name: Upload generated video
-        if: always()
+      - name: Upload result as artifact
         uses: actions/upload-artifact@v4
         with:
           name: daily-video
