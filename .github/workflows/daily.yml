@@ -38,11 +38,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pipeline
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          FAL_KEY: ${{ secrets.FAL_KEY }}
-        run: python main.py
-
+  env:
+    GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    FAL_KEY: ${{ secrets.FAL_KEY }}
+  run: python main.py
       - name: Upload result as artifact
         uses: actions/upload-artifact@v4
         with:
