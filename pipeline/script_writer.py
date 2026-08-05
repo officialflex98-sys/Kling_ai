@@ -1,37 +1,53 @@
 """
-Turns a bare topic into a structured video script using the Gemini REST API.
-"""
+Turns a bare topic into a structured video script:
+- a short on-screen title
+- a list of narration "beats" (sentences), each tagged with a plain-English
+  visual search keyword used later to generate a matching AI video clip
 
+The beat/keyword split is the whole trick that makes auto-generated video
+work for ANY topic: the model does the work of translating narration into
+a concrete, filmable scene description, per beat, instead of one vague
+prompt for the whole video.
+
+Uses Google's Gemini API. Model pinned to gemini-3.6-flash (current stable
+GA Flash model as of this writing) — Google retires Gemini model IDs on a
+rolling schedule (they did exactly that to gemini-2.5-flash), so if this
+starts 404ing again, check https://ai.google.dev/gemini-api/docs/models
+for the current recommended Flash model and update MODEL below.
+"""
 import json
 import os
 import re
 from dataclasses import dataclass
 
-import requests
+from google import genai
+from google.genai import types
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.6-flash"
 
-SYSTEM_PROMPT = """You write scripts for short-form documentary-style videos
-(YouTube Shorts / TikTok, ~35-50 seconds spoken). Style: punchy, factual,
-one idea per sentence, hooks the viewer in the first line. No fluff.
+SYSTEM_PROMPT = """You write scripts for short-form documentary-style videos \
+(YouTube Shorts / TikTok, ~35-50 seconds spoken). Style: punchy, factual, \
+one idea per sentence, hooks the viewer in the first line. No fluff, no \
+"welcome back to my channel" filler.
 
-Return ONLY valid JSON.
+You must return ONLY valid JSON, no markdown fences, no preamble, matching \
+exactly this shape:
 
 {
   "title": "short on-screen title, under 8 words",
   "beats": [
-    {
-      "narration": "one spoken sentence",
-      "visual_keyword": "2-4 word stock footage search term"
-    }
+    {"narration": "one spoken sentence", "visual_keyword": "2-4 word stock footage search term"}
   ]
 }
 
 Rules:
-- 6 to 9 beats.
-- One sentence per beat.
-- Concrete visual keywords.
-- First beat must hook the viewer.
+- 6 to 9 beats total.
+- Each "narration" is ONE sentence, spoken-language, no citations, no markdown.
+- Each "visual_keyword" must describe something concretely filmable \
+(e.g. "submarine hull rivets close up", "ocean waves aerial", \
+"ancient stone blocks") — never an abstract phrase a camera can't capture.
+- First beat must be a hook, not background/definition.
+- Do not use the word "video" or refer to the channel/creator.
 """
 
 
@@ -48,83 +64,51 @@ class Script:
     beats: list[Beat]
 
     @property
-    def full_narration(self):
+    def full_narration(self) -> str:
         return " ".join(b.narration for b in self.beats)
 
 
-def _extract_json(text: str):
+def _extract_json(text: str) -> dict:
     text = text.strip()
-
-    text = re.sub(r"^```json", "", text)
-    text = re.sub(r"^```", "", text)
-    text = re.sub(r"```$", "", text)
-    text = text.strip()
-
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-
-    if not match:
-        raise ValueError("No JSON returned by Gemini.")
-
-    return json.loads(match.group(0))
+    # Strip markdown fences if the model added them despite instructions
+    text = re.sub(r"^```(json)?", "", text).strip()
+    text = re.sub(r"```$", "", text).strip()
+    return json.loads(text)
 
 
 def write_script(topic: str) -> Script:
     api_key = os.environ.get("GEMINI_API_KEY")
-
     if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY not found.")
+        raise EnvironmentError(
+            "GEMINI_API_KEY not set. Copy .env.example to .env and fill it in. "
+            "Get a free key at https://aistudio.google.com/apikey"
+        )
 
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{MODEL}:generateContent?key={api_key}"
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=f"Topic: {topic}",
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+        ),
     )
-
-    payload = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": f"{SYSTEM_PROMPT}\n\nTopic: {topic}"
-                    }
-                ]
-            }
-        ]
-    }
-
-    response = requests.post(
-        url,
-        headers={"Content-Type": "application/json"},
-        json=payload,
-        timeout=120,
-    )
-
-    response.raise_for_status()
-
-    result = response.json()
-
-    raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
-
-    data = _extract_json(raw_text)
+    data = _extract_json(response.text)
 
     beats = [
-        Beat(
-            narration=beat["narration"],
-            visual_keyword=beat["visual_keyword"],
-        )
-        for beat in data["beats"]
+        Beat(narration=b["narration"], visual_keyword=b["visual_keyword"])
+        for b in data["beats"]
     ]
-
-    return Script(
-        topic=topic,
-        title=data["title"],
-        beats=beats,
-    )
+    return Script(topic=topic, title=data["title"], beats=beats)
 
 
 if __name__ == "__main__":
-    script = write_script("How submarines evolved into deep-sea predators")
+    import sys
+    from dotenv import load_dotenv
 
+    load_dotenv()
+    topic = sys.argv[1] if len(sys.argv) > 1 else "how black holes evaporate"
+    script = write_script(topic)
     print(f"TITLE: {script.title}\n")
-
-    for i, beat in enumerate(script.beats, 1):
-        print(f"{i}. [{beat.visual_keyword}] {beat.narration}")
+    for i, b in enumerate(script.beats, 1):
+        print(f"{i}. [{b.visual_keyword}] {b.narration}")
