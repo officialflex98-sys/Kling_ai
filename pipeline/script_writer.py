@@ -1,9 +1,13 @@
+"""
+Turns a bare topic into a structured video script using the Gemini REST API.
+"""
+
 import json
 import os
 import re
 from dataclasses import dataclass
 
-from google import genai
+import requests
 
 MODEL = "gemini-2.5-flash"
 
@@ -30,10 +34,12 @@ Rules:
 - First beat must hook the viewer.
 """
 
+
 @dataclass
 class Beat:
     narration: str
     visual_keyword: str
+
 
 @dataclass
 class Script:
@@ -47,33 +53,65 @@ class Script:
 
 
 def _extract_json(text: str):
+    text = text.strip()
+
+    text = re.sub(r"^```json", "", text)
+    text = re.sub(r"^```", "", text)
+    text = re.sub(r"```$", "", text)
+    text = text.strip()
+
     match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return json.loads(match.group(0))
-    return json.loads(text)
+
+    if not match:
+        raise ValueError("No JSON returned by Gemini.")
+
+    return json.loads(match.group(0))
 
 
-def write_script(topic: str):
+def write_script(topic: str) -> Script:
     api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
         raise EnvironmentError("GEMINI_API_KEY not found.")
 
-    client = genai.Client(api_key=api_key)
-
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=f"{SYSTEM_PROMPT}\n\nTopic: {topic}",
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{MODEL}:generateContent?key={api_key}"
     )
 
-    data = _extract_json(response.text)
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": f"{SYSTEM_PROMPT}\n\nTopic: {topic}"
+                    }
+                ]
+            }
+        ]
+    }
+
+    response = requests.post(
+        url,
+        headers={"Content-Type": "application/json"},
+        json=payload,
+        timeout=120,
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    raw_text = result["candidates"][0]["content"]["parts"][0]["text"]
+
+    data = _extract_json(raw_text)
 
     beats = [
         Beat(
-            narration=b["narration"],
-            visual_keyword=b["visual_keyword"],
+            narration=beat["narration"],
+            visual_keyword=beat["visual_keyword"],
         )
-        for b in data["beats"]
+        for beat in data["beats"]
     ]
 
     return Script(
@@ -86,7 +124,7 @@ def write_script(topic: str):
 if __name__ == "__main__":
     script = write_script("How submarines evolved into deep-sea predators")
 
-    print(script.title)
+    print(f"TITLE: {script.title}\n")
 
-    for beat in script.beats:
-        print(beat.visual_keyword, "-", beat.narration)
+    for i, beat in enumerate(script.beats, 1):
+        print(f"{i}. [{beat.visual_keyword}] {beat.narration}")
