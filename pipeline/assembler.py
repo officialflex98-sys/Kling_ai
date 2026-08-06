@@ -17,6 +17,25 @@ import subprocess
 from pathlib import Path
 
 
+def _wrap_title(title: str, max_chars: int = 18) -> str:
+    """Breaks a long title into centered lines so drawtext never runs off
+    the sides of a 1080px-wide frame — a single unwrapped line was the
+    cause of titles getting cut off at both edges."""
+    words = title.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > max_chars and current:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
 def _run(cmd: list[str]) -> None:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -49,8 +68,6 @@ def _make_beat_visual(clip_path: Path | None, duration: float, out_path: Path) -
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,fps=30"
     )
-    # -stream_loop -1 lets a short clip loop to cover a longer beat;
-    # -t then hard-caps it to the exact beat duration either way.
     cmd = [
         "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(clip_path),
         "-vf", vf, "-an", "-t", str(duration), str(out_path),
@@ -81,7 +98,6 @@ def build_video(
 ) -> Path:
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Per-beat visuals matched to per-beat audio duration
     beat_visuals = []
     for i, (clip, audio) in enumerate(zip(clip_paths, beat_audio_paths)):
         duration = _probe_duration(audio)
@@ -89,14 +105,12 @@ def build_video(
         _make_beat_visual(clip, duration, out)
         beat_visuals.append(out)
 
-    # 2 & 3. Concat visuals and concat narration separately
     visuals_concat = work_dir / "visuals.mp4"
     _concat(beat_visuals, visuals_concat)
 
     narration_concat = work_dir / "narration.mp3"
     _concat(list(beat_audio_paths), narration_concat)
 
-    # 4. Mux video + narration (+ optional background music, ducked low)
     muxed = work_dir / "muxed.mp4"
     if music_path and music_path.exists():
         cmd = [
@@ -120,11 +134,12 @@ def build_video(
     _run(cmd)
 
     # 5. Burn captions + title card
-    title_escaped = title.replace("'", "\u2019").replace(":", "\\:")
+    title_wrapped = _wrap_title(title)
+    title_escaped = title_wrapped.replace("'", "\u2019").replace(":", "\\:")
     title_filter = (
         f"drawtext=text='{title_escaped}':fontfile=/usr/share/fonts/truetype/"
-        "dejavu/DejaVuSans-Bold.ttf:fontsize=54:fontcolor=yellow:"
-        "borderw=3:bordercolor=black:x=(w-text_w)/2:y=140:"
+        "dejavu/DejaVuSans-Bold.ttf:fontsize=46:fontcolor=yellow:"
+        "borderw=3:bordercolor=black:x=(w-text_w)/2:y=140:line_spacing=10:"
         "enable='between(t,0,3.5)'"
     )
     vf = f"{title_filter},ass={captions_ass}"
