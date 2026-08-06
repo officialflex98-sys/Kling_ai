@@ -60,7 +60,9 @@ def pick_topic(explicit_topic: str | None = None) -> str:
     _save_used(used)
 
     log_entry = f"{datetime.now(timezone.utc).isoformat()} :: {chosen}"
-    with open(ROOT / "logs" / "topic_history.log", "a", encoding="utf-8") as f:
+    log_path = ROOT / "logs" / "topic_history.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as f:
         f.write(log_entry + "\n")
 
     return chosen
